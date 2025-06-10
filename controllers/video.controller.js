@@ -2,11 +2,12 @@ import mongoose from "mongoose";
 import {
   uploadOnCloudinary,
   deleteFromCloudinary,
-} from "../utils/cloudinary.js";
-import { asyncHandler } from "../utils/asyncHandler.js";
+} from "../utils/Cloudinary.js";
+import { asyncHandler } from "../utils/AsyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Video } from "../models/video.models.js";
+import { Course } from "../models/course.model.js";
 
 const getAllVideos = asyncHandler(async (req, res) => {
   const {
@@ -86,7 +87,7 @@ const getAllVideos = asyncHandler(async (req, res) => {
 });
 
 const publishAVideo = asyncHandler(async (req, res) => {
-  const { title, description } = req.body;
+  const { title, description, lectureNumber, courseId } = req.body;
 
   if ([title, description].some((field) => field?.trim() === "")) {
     throw new ApiError(404, "Title and Description both are required");
@@ -125,13 +126,19 @@ const publishAVideo = asyncHandler(async (req, res) => {
     },
     title,
     description,
+    lectureNumber,
     duration: videoFile.duration,
     owner: req.user?._id,
+    courseId:courseId
   });
 
   if (!publishedVideo) {
     throw new ApiError(500, "Something went wrong on our side");
   }
+
+  await Course.findByIdAndUpdate(courseId,{
+    $push:{video:publishedVideo._id}
+  })
 
   return res
     .status(200)
@@ -164,7 +171,7 @@ const getVideoById = asyncHandler(async (req, res) => {
 
 const updateVideo = asyncHandler(async (req, res) => {
   const videoId = req.params.id;
-  const { title, description } = req.body;
+  const { title, description, lectureNumber } = req.body;
 
   if (!(title || description || req.file)) {
     throw new ApiError(404, "Selected field is required");
@@ -174,6 +181,7 @@ const updateVideo = asyncHandler(async (req, res) => {
 
   if (title) updatedFields.title = title;
   if (description) updatedFields.description = description;
+  if (lectureNumber) updatedFields.lectureNumber = lectureNumber;
 
   if (req.file) {
     const newThumbnailFile = await uploadOnCloudinary(

@@ -38,6 +38,10 @@ const videoSchema = new Schema({
         type: Number,
         default: 0
     },
+    lectureNumber:{
+        type: Number, 
+        required: true
+    },
     isPublished: {
         type: Boolean,
         default: true
@@ -45,6 +49,10 @@ const videoSchema = new Schema({
     owner:{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"
+    },
+    courseId:{
+        type:mongoose.Schema.Types.ObjectId,
+        ref:'Course'
     }
 },
 {
