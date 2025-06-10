@@ -30,6 +30,10 @@ const userSchema = new mongoose.Schema({
         type: String,
         required: [true,'Password is required']
     },
+    subscribedCourses:{
+        type:mongoose.Schema.Types.ObjectId,
+        ref:'Course'
+    },
     refreshToken:{
         type: String
     }
