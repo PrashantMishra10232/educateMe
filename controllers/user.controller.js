@@ -38,6 +38,9 @@ const registerUser = asyncHandler(async (req, res) => {
     $or: [{ fullName }, { email }],
   });
 
+  const userCounts = await User.countDocuments();
+  const role = userCounts === 0 ? 'admin' : 'student'
+
   if (existedUser) {
     throw new ApiError(409, "User with email or username already existed");
   }
@@ -61,6 +64,7 @@ const registerUser = asyncHandler(async (req, res) => {
       profilePhoto: profilePhoto.url,
       profilePhoto_id: profilePhoto_id,
     },
+    role,
   });
 
   const createdUser = await User.findById(user._id).select("-password");
