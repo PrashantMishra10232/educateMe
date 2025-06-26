@@ -1,6 +1,7 @@
 import mongoose, {Schema}  from "mongoose";
 import JsonWebToken from "jsonwebtoken";
-import bcrypt from "bcrypt"
+import bcrypt from "bcrypt";
+import crypto from "crypto"
 
 const userSchema = new mongoose.Schema({
     fullName: {
@@ -18,7 +19,7 @@ const userSchema = new mongoose.Schema({
     },
     role:{
         type:String,
-        enum:[student,admin],
+        enum:['student','admin'],
         default:'student',
         required:true
     },
@@ -42,7 +43,9 @@ const userSchema = new mongoose.Schema({
     },
     refreshToken:{
         type: String
-    }
+    },
+    resetPasswordToken:String,
+    resetPasswordTokenExpiry:Date,
 },
 {
     timestamps: true,
@@ -56,8 +59,24 @@ userSchema.pre("save",async function (next){
 
 userSchema.methods.isPasswordCorrect = async function(password){
     return await bcrypt.compare(password, this.password)
-} 
-userSchema.methods.generateAccessToken =function(){
+}
+
+userSchema.methods.generateResetPasswordToken = async function(){
+    //generate the token
+    const resetToken = crypto.randomBytes(20).toString('hex')
+
+    //hashing and adding resetpasswordtoken to userSchema
+    this.resetPasswordToken = crypto
+    .createHash('sha256')
+    .update(resetToken)
+    .digest('hex')
+
+    this.resetPasswordTokenExpiry = Date.now() + 15*60*1000;
+
+    return resetToken;
+}
+
+userSchema.methods.generateAccessToken = function(){
     return JsonWebToken.sign(
         {
             _id: this.id,
@@ -71,7 +90,7 @@ userSchema.methods.generateAccessToken =function(){
     )
 }
     
-userSchema.methods.generateRefreshToken = async function(){
+userSchema.methods.generateRefreshToken = function(){
     return JsonWebToken.sign(
         {
             _id: this.id,

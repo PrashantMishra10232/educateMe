@@ -7,6 +7,9 @@ import {
   uploadOnCloudinary,
   deleteFromCloudinary,
 } from "../utils/Cloudinary.js";
+import { sendEmail } from "../utils/sendEmail.js";
+import { use } from "react";
+import { hash } from "bcrypt";
 
 const generateAccessAndRefereshTokens = async (userId) => {
   try {
@@ -94,12 +97,12 @@ const loginUser = asyncHandler(async (req, res) => {
   }
 
   //check if trhe password is correct
-  const isPasswordValid = await User.isPasswordCorrect(password);
+  const isPasswordValid = await user.isPasswordCorrect(password);
   if (!isPasswordValid) {
     throw new ApiError(401, "Invalid user credentials");
   }
 
-  const { accessToken, refreshToken } = generateAccessAndRefereshTokens(
+  const { accessToken, refreshToken } = await generateAccessAndRefereshTokens(
     user._id
   );
 
@@ -113,9 +116,9 @@ const loginUser = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .cookie("accessToken", accessToken, { options, maxAge: 60 * 60 * 1000 })
+    .cookie("accessToken", accessToken, { ...options, maxAge: 60 * 60 * 1000 })
     .cookie("refreshToken", refreshToken, {
-      options,
+      ...options,
       maxAge: 10 * 24 * 60 * 60 * 1000,
     })
     .json(new ApiResponse(200, loggedInUser, "User loggedIn successfully"));
@@ -200,7 +203,7 @@ const updateProfilePhoto = asyncHandler(async (req, res) => {
   // Check if the user has an existing profile photo ID (only delete if it exists)
   if (User.profilePhoto_id) {
     try {
-      await deleteFromCloudinary(User.profilePhoto_id); // Delete the previous profile photo from Cloudinary
+      await deleteFromCloudinary(User.profilePhoto_id,'image'); // Delete the previous profile photo from Cloudinary
     } catch (error) {
       throw new ApiError(500, "Error while deleting previous profile photo");
     }
@@ -234,4 +237,57 @@ const updateProfilePhoto = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, user, "Profile Photo Updated successfully"));
 });
 
-export { generateAccessAndRefereshTokens, registerUser, loginUser, logout, refreshAccessToken, updateProfilePhoto };
+const requestResetCode = asyncHandler(async(req,res)=>{
+  const {email} = req.body;
+  if(!email){
+    throw new ApiError(404,"Enter the email first")
+  }
+
+  const user = await User.findOne({email});
+  if (!user) throw new ApiError(404, "User not found");
+  const code = await user.generateResetPasswordToken();
+
+  //saving the code to DB
+  user.resetPasswordToken = code;
+  await user.save({validateBeforeSave:false});
+
+  const options = {
+    email: email,
+    subject: 'Code for password reset',
+    message : `Here is your code to reset your password ${code}, Do not share it with anyone. The code is only valid for 15 minutes`
+  }
+  await sendEmail(options);
+
+  return res.status(200).json(new ApiResponse(200,{},"Password changed successfully"))
+})
+
+const resetPassword = asyncHandler(async(req,res)=>{
+  const {email, resetCode, password} = req.body;
+
+  if(!email || !password || !resetCode){
+    throw new ApiError(404,"All fields are required")
+  }
+
+  const user = await User.findOne({email});
+  if (!user) throw new ApiError(404, "User not found");
+
+  //hash the code to comapre it
+  const hashedCode = crypto
+  .hash('sha256')
+  .update(resetCode)
+  .digest('hex')  //.digest finalize the hashing and return it in hexadecimal format as i am usind 'hex' can use different formats
+
+  if(hashedCode !== user.resetPasswordToken || Date.now()>user.resetPasswordTokenExpiry){
+    throw new ApiError(400,"Invalid or expired reset code")
+  }
+
+  user.password = password;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordTokenExpiry = undefined;
+
+  await user.save().select("-password")
+
+  return res.status(200).json(new ApiResponse(200,{},"Password reset successfully"))
+})
+
+export { generateAccessAndRefereshTokens, registerUser, loginUser, logout, refreshAccessToken, updateProfilePhoto, requestResetCode, resetPassword };
