@@ -48,3 +48,16 @@ connectDB().then(() => {
     console.log(`server is running at ${process.env.PORT}`);
   });
 });
+
+//route declaration
+import userRouter from "./routes/user.routes.js";
+import videoRouter from "./routes/video.routes.js";
+import razorpayRouter from "./routes/razorpay.routes.js";
+import questionRouter from "./routes/questions.routes.js";
+import courseRouter from "./routes/course.routes.js";
+
+app.use("/api/v1/user",userRouter);
+app.use("/api/v1/course",courseRouter);
+app.use('/api/v1/question',questionRouter);
+app.use('/api/v1/course/video',videoRouter);
+app.use('/api/v1/course/payment',razorpayRouter);

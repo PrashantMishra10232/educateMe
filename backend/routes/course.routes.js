@@ -7,4 +7,6 @@ const router = Router();
 router.route('/getAllCourses').get(verifyJwt,getAllCourses);
 router.route('/getCourse/:id').get(verifyJwt,getCourseById);
 router.route('/setupCourse').post(verifyJwt,upload.single('coverImage'),setupCourse);
-router.route('/deleteCourse').delete(verifyJwt,deleteCourse)
+router.route('/deleteCourse/:id').delete(verifyJwt,deleteCourse)
+
+export default router;

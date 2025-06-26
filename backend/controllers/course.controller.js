@@ -89,12 +89,14 @@ const deleteCourse = asyncHandler(async (req, res) => {
       }
 
       if (video.thumbnail.thumbnailFileId) {
-        await deleteFromCloudinary(thumbnailFileId);
+        await deleteFromCloudinary(thumbnailFileId, "video");
       }
     }
 
-    if (course.coverImage.coverImageFileId) {
-      deleteFromCloudinary(coverImageFileId);
+    const coverImageId = course?.coverImage?.coverImageFileId;
+
+    if (coverImageId) {
+      deleteFromCloudinary(coverImageId, "image");
     }
 
     await Course.findByIdAndDelete(courseId);
