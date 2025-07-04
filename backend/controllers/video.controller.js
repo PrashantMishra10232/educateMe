@@ -6,7 +6,7 @@ import {
 import { asyncHandler } from "../utils/AsyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
-import { Video } from "../models/video.models.js";
+import { Video } from "../models/video.model.js";
 import { Course } from "../models/course.model.js";
 
 const getAllVideos = asyncHandler(async (req, res) => {
@@ -87,15 +87,27 @@ const getAllVideos = asyncHandler(async (req, res) => {
 });
 
 const publishAVideo = asyncHandler(async (req, res) => {
-  const { title, description, lectureNumber, courseId } = req.body;
+  const courseId = req.params.id;
+  const course = await Course.findById(courseId);
+  let lectureNumber = req.body.lectureNumber;
+  if (!lectureNumber) {
+    lectureNumber = course.videos.length + 1;
+  }
+
+  const { title, description } = req.body;
 
   if ([title, description].some((field) => field?.trim() === "")) {
     throw new ApiError(404, "Title and Description both are required");
   }
 
+  // Validate file presence
+  if (!req.files?.video?.[0] || !req.files?.thumbnail?.[0]) {
+    throw new ApiError(400, "Both video and thumbnail files are required");
+  }
+
   const videoFile = await uploadOnCloudinary(
-    req.files.videoFile[0].buffer,
-    req.file.videoFile[0].originalname
+    req.files.video[0].buffer,
+    req.files.video[0].originalname
   );
 
   const videoFileId = videoFile.public_id;
@@ -109,9 +121,9 @@ const publishAVideo = asyncHandler(async (req, res) => {
     req.files?.thumbnail[0].originalname
   );
 
-  const thumbnailFileId = thumbnail.public_id;
+  const thumbnailFileId = thumbnailFile.public_id;
 
-  if (!thumbnail) {
+  if (!thumbnailFileId) {
     throw new ApiError(404, "Error while uploading the thumbnail");
   }
 
@@ -121,24 +133,24 @@ const publishAVideo = asyncHandler(async (req, res) => {
       videoFileId: videoFileId,
     },
     thumbnail: {
-        thumbnailFile: thumbnailFile?.url || "",
-        thumbnailFileId:thumbnailFileId
+      thumbnailFile: thumbnailFile?.url || "",
+      thumbnailFileId: thumbnailFileId,
     },
     title,
     description,
     lectureNumber,
     duration: videoFile.duration,
     owner: req.user?._id,
-    courseId:courseId
+    courseId: courseId,
   });
 
   if (!publishedVideo) {
     throw new ApiError(500, "Something went wrong on our side");
   }
 
-  await Course.findByIdAndUpdate(courseId,{
-    $push:{video:publishedVideo._id}
-  })
+  await Course.findByIdAndUpdate(courseId, {
+    $push: { videos: publishedVideo._id },
+  });
 
   return res
     .status(200)
@@ -152,7 +164,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
 });
 
 const getVideoById = asyncHandler(async (req, res) => {
-  const { videoId } = req.params;
+  const videoId  = req.params.id;
 
   if (!mongoose.Types.ObjectId.isValid(videoId)) {
     throw new ApiError(400, "Invalid video ID");
@@ -196,9 +208,9 @@ const updateVideo = asyncHandler(async (req, res) => {
     }
 
     updatedFields.thumbnail = {
-        thumbnailFile: newThumbnailFile.url,
-        thumbnailFileId: newThumbnailFileId
-    }
+      thumbnailFile: newThumbnailFile.url,
+      thumbnailFileId: newThumbnailFileId,
+    };
   }
 
   const updatedVideo = await Video.findByIdAndUpdate(
@@ -211,22 +223,25 @@ const updateVideo = asyncHandler(async (req, res) => {
     }
   );
 
-  return res.status(200)
-  .json(new ApiResponse(200,updatedVideo,"Your video details got updated"))
+  return res
+    .status(200)
+    .json(new ApiResponse(200, updatedVideo, "Your video details got updated"));
 });
 
-const deleteVideo = asyncHandler(async(req,res)=>{
-    const videoId = req.params.id;
-    const videoDoc = await Video.findById(videoId);
+const deleteVideo = asyncHandler(async (req, res) => {
+  const videoId = req.params.id;
+  const videoDoc = await Video.findById(videoId);
 
-    if(videoDoc.video?.videoFileId && videoDoc.thumbnail?.thumbnailFileId){
-        await deleteFromCloudinary(videoDoc.video?.videoFileId);
-        await deleteFromCloudinary(videoDoc.thumbnail?.thumbnailFileId);
-    }
+  if (videoDoc.video?.videoFileId && videoDoc.thumbnail?.thumbnailFileId) {
+    await deleteFromCloudinary(videoDoc.video?.videoFileId, "video");
+    await deleteFromCloudinary(videoDoc.thumbnail?.thumbnailFileId, "image");
+  }
 
-    await Video.findByIdAndDelete(videoId);
+  await Video.findByIdAndDelete(videoId);
 
-    return res.status(200).json(new ApiResponse(200,{},"Video deleted successfully"))
-})
+  return res
+    .status(200)
+    .json(new ApiResponse(200, {}, "Video deleted successfully"));
+});
 
 export { getAllVideos, publishAVideo, getVideoById, updateVideo, deleteVideo };
