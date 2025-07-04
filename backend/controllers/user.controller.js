@@ -8,8 +8,8 @@ import {
   deleteFromCloudinary,
 } from "../utils/Cloudinary.js";
 import { sendEmail } from "../utils/sendEmail.js";
-import { use } from "react";
-import { hash } from "bcrypt";
+import redis from "../utils/redis.js"
+import crypto from "crypto"
 
 const generateAccessAndRefereshTokens = async (userId) => {
   try {
@@ -29,11 +29,86 @@ const generateAccessAndRefereshTokens = async (userId) => {
   }
 };
 
+const requestOtp = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+
+  const ip = req.ip; //user ip address
+
+  if (!email) {
+    throw new ApiError(400, "Email is required");
+  }
+
+  const user = await User.findOne({email});
+  if(user){
+    throw new ApiError(400,'User already exists')
+  }
+
+  //redis stuff
+  const emailKey = `otp_requests:email:${email}`;
+  const ipKey = `otp_requests:ip:${ip}`;
+
+  //check for email
+  const emailRequests = await redis.get(emailKey);
+  if(emailRequests && Number(emailRequests)>=3){
+    throw new ApiError(429,"Too many OTP requests for this email. Try again later.")
+  }
+
+  //check for ip
+  const ipRequests = await redis.get(ipKey);
+  if(ipRequests && Number(ipRequests)>=10){
+    throw new ApiError(429,"Too many requests from your device. Please try again later.")
+  }
+
+  // increament counts for email
+  await redis.incr(emailKey);
+  await redis.expire(emailKey,60*60);
+
+  // increament counts for ip
+  await redis.incr(ipKey);
+  await redis.expire(ipKey,60*60);
+
+  const otp = Math.floor(100000 + Math.random() * 900000);
+
+  //hashing the otp before saving to redis
+  const hashedOtp = crypto
+  .createHash('sha256')
+  .update(`${otp}`)
+  .digest('hex')
+
+  await redis.set(`otp:${email}`,hashedOtp,"EX",15*60);
+
+  //reseting the attempts for every new request for otp 
+  await redis.del(`otp_attempts:email:${email}`)
+
+  await sendEmail({
+    email: email,
+    subject: "Your One-Time Password (OTP) for Registration",
+    message: 
+    `Hello,
+
+    Thank you for registering with us!
+
+    Your One-Time Password (OTP) for completing your registration is:
+
+    OTP: ${otp}
+
+    This OTP is valid for the next 15 minutes. Please do not share it with anyone for security reasons.
+
+    If you did not request this, please ignore this message.
+
+    – The EducateMe Team
+    -For any help! contact-prashantmishra10232@gmail.com`,
+  });
+
+  return res.status(200)
+  .json(new ApiResponse(200,{},"OTP sent successfully"))
+});
+
 const registerUser = asyncHandler(async (req, res) => {
-  const { fullName, email, password } = req.body;
+  const { fullName, email, password, otp } = req.body;
   // console.log(fullName, email, username, password);
 
-  if ([fullName, email, password].some((field) => field?.trim() === "")) {
+  if ([fullName, email, password, otp].some((field) => field?.trim() === "")) {
     throw new ApiError(400, "all fields are required");
   }
 
@@ -42,7 +117,7 @@ const registerUser = asyncHandler(async (req, res) => {
   });
 
   const userCounts = await User.countDocuments();
-  const role = userCounts === 0 ? 'admin' : 'student'
+  const role = userCounts === 0 ? "admin" : "student";
 
   if (existedUser) {
     throw new ApiError(409, "User with email or username already existed");
@@ -58,6 +133,41 @@ const registerUser = asyncHandler(async (req, res) => {
   if (!profilePhoto) {
     throw new ApiError(401, "Error while uploading the profile photo");
   }
+
+  const attemptsKey = `otp_attempts:email:${email}`;
+  const attempts = await redis.get(attemptsKey);
+
+  if(attempts && Number(attempts)>=5){
+    throw new ApiError(429,"Too many incorrect attempts. Try later.")
+  };
+
+  //fetching the otp from redis
+  const hashedOtp = await redis.get(`otp:${email}`);
+
+  if(!hashedOtp){
+    throw new ApiError(400,"OTP expired or not requested")
+  }
+
+  //hash the incoming otp to compare it with redis otp
+  const incomingOtpHashed = crypto
+  .createHash('sha256')
+  .update(`${otp}`)
+  .digest('hex');
+
+  //now compare them
+  if(hashedOtp !== incomingOtpHashed){
+    await redis.incr(attemptsKey) //here i am incrementing the counts of attempts
+    await redis.expire(attemptsKey,60*60);
+    throw new ApiError(400,"Invalid OTP")
+  }
+
+  await redis.del(`otp:${email}`);
+  await redis.del(attemptsKey);
+
+  await redis.multi()
+  .incr(attemptsKey)
+  .expire(attemptsKey, 60*60)
+  .exec();
 
   const user = await User.create({
     fullName,
@@ -203,7 +313,7 @@ const updateProfilePhoto = asyncHandler(async (req, res) => {
   // Check if the user has an existing profile photo ID (only delete if it exists)
   if (User.profilePhoto_id) {
     try {
-      await deleteFromCloudinary(User.profilePhoto_id,'image'); // Delete the previous profile photo from Cloudinary
+      await deleteFromCloudinary(User.profilePhoto_id, "image"); // Delete the previous profile photo from Cloudinary
     } catch (error) {
       throw new ApiError(500, "Error while deleting previous profile photo");
     }
@@ -237,57 +347,71 @@ const updateProfilePhoto = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, user, "Profile Photo Updated successfully"));
 });
 
-const requestResetCode = asyncHandler(async(req,res)=>{
-  const {email} = req.body;
-  if(!email){
-    throw new ApiError(404,"Enter the email first")
+const requestResetCode = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    throw new ApiError(404, "Enter the email first");
   }
 
-  const user = await User.findOne({email});
+  const user = await User.findOne({ email });
   if (!user) throw new ApiError(404, "User not found");
   const code = await user.generateResetPasswordToken();
 
   //saving the code to DB
   user.resetPasswordToken = code;
-  await user.save({validateBeforeSave:false});
+  await user.save({ validateBeforeSave: false });
 
   const options = {
     email: email,
-    subject: 'Code for password reset',
-    message : `Here is your code to reset your password ${code}, Do not share it with anyone. The code is only valid for 15 minutes`
-  }
+    subject: "Code for password reset",
+    message: `Here is your code to reset your password ${code}, Do not share it with anyone. The code is only valid for 15 minutes`,
+  };
   await sendEmail(options);
 
-  return res.status(200).json(new ApiResponse(200,{},"Password changed successfully"))
-})
+  return res
+    .status(200)
+    .json(new ApiResponse(200, {}, "Password changed successfully"));
+});
 
-const resetPassword = asyncHandler(async(req,res)=>{
-  const {email, resetCode, password} = req.body;
+const resetPassword = asyncHandler(async (req, res) => {
+  const { email, resetCode, password } = req.body;
 
-  if(!email || !password || !resetCode){
-    throw new ApiError(404,"All fields are required")
+  if (!email || !password || !resetCode) {
+    throw new ApiError(404, "All fields are required");
   }
 
-  const user = await User.findOne({email});
+  const user = await User.findOne({ email });
   if (!user) throw new ApiError(404, "User not found");
 
   //hash the code to comapre it
-  const hashedCode = crypto
-  .hash('sha256')
-  .update(resetCode)
-  .digest('hex')  //.digest finalize the hashing and return it in hexadecimal format as i am usind 'hex' can use different formats
+  const hashedCode = crypto.hash("sha256").update(resetCode).digest("hex"); //.digest finalize the hashing and return it in hexadecimal format as i am usind 'hex' can use different formats
 
-  if(hashedCode !== user.resetPasswordToken || Date.now()>user.resetPasswordTokenExpiry){
-    throw new ApiError(400,"Invalid or expired reset code")
+  if (
+    hashedCode !== user.resetPasswordToken ||
+    Date.now() > user.resetPasswordTokenExpiry
+  ) {
+    throw new ApiError(400, "Invalid or expired reset code");
   }
 
   user.password = password;
   user.resetPasswordToken = undefined;
   user.resetPasswordTokenExpiry = undefined;
 
-  await user.save().select("-password")
+  await user.save().select("-password");
 
-  return res.status(200).json(new ApiResponse(200,{},"Password reset successfully"))
-})
+  return res
+    .status(200)
+    .json(new ApiResponse(200, {}, "Password reset successfully"));
+});
 
-export { generateAccessAndRefereshTokens, registerUser, loginUser, logout, refreshAccessToken, updateProfilePhoto, requestResetCode, resetPassword };
+export {
+  generateAccessAndRefereshTokens,
+  requestOtp,
+  registerUser,
+  loginUser,
+  logout,
+  refreshAccessToken,
+  updateProfilePhoto,
+  requestResetCode,
+  resetPassword,
+};
