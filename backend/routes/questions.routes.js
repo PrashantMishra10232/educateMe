@@ -9,3 +9,6 @@ router.route('/getAllQuestions').get(verifyJwt,getAllQuestions);
 router.route('getQuestion/:id').get(verifyJwt,getQuestionsById);
 router.route('addQuestion').post(verifyJwt,addQuestion);
 router.route('deleteQuestion').delete(verifyJwt,deleteQuestion);
+
+
+export default router;
