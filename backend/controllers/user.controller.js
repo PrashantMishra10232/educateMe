@@ -8,8 +8,8 @@ import {
   deleteFromCloudinary,
 } from "../utils/Cloudinary.js";
 import { sendEmail } from "../utils/sendEmail.js";
-import redis from "../utils/redis.js"
-import crypto from "crypto"
+import redis from "../utils/redis.js";
+import crypto from "crypto";
 
 const generateAccessAndRefereshTokens = async (userId) => {
   try {
@@ -38,9 +38,9 @@ const requestOtp = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Email is required");
   }
 
-  const user = await User.findOne({email});
-  if(user){
-    throw new ApiError(400,'User already exists')
+  const user = await User.findOne({ email });
+  if (user) {
+    throw new ApiError(400, "User already exists");
   }
 
   //redis stuff
@@ -49,42 +49,44 @@ const requestOtp = asyncHandler(async (req, res) => {
 
   //check for email
   const emailRequests = await redis.get(emailKey);
-  if(emailRequests && Number(emailRequests)>=3){
-    throw new ApiError(429,"Too many OTP requests for this email. Try again later.")
+  if (emailRequests && Number(emailRequests) >= 3) {
+    throw new ApiError(
+      429,
+      "Too many OTP requests for this email. Try again later."
+    );
   }
 
   //check for ip
   const ipRequests = await redis.get(ipKey);
-  if(ipRequests && Number(ipRequests)>=10){
-    throw new ApiError(429,"Too many requests from your device. Please try again later.")
+  if (ipRequests && Number(ipRequests) >= 10) {
+    throw new ApiError(
+      429,
+      "Too many requests from your device. Please try again later."
+    );
   }
 
   // increament counts for email
   await redis.incr(emailKey);
-  await redis.expire(emailKey,60*60);
+  await redis.expire(emailKey, 60 * 60);
 
   // increament counts for ip
   await redis.incr(ipKey);
-  await redis.expire(ipKey,60*60);
+  await redis.expire(ipKey, 60 * 60);
 
   const otp = Math.floor(100000 + Math.random() * 900000);
 
   //hashing the otp before saving to redis
-  const hashedOtp = crypto
-  .createHash('sha256')
-  .update(`${otp}`)
-  .digest('hex')
+  const hashedOtp = crypto.createHash("sha256").update(`${otp}`).digest("hex");
 
-  await redis.set(`otp:${email}`,hashedOtp,"EX",15*60);
+  await redis.set(`otp:${email}`, hashedOtp, "EX", 15 * 60);
 
-  //reseting the attempts for every new request for otp 
-  await redis.del(`otp_attempts:email:${email}`)
+  //reseting the attempts for every new request for otp
+  await redis.del(`otp_attempts:email:${email}`);
 
   await sendEmail({
     email: email,
     subject: "Your One-Time Password (OTP) for Registration",
-    message: 
-    `Hello,
+    message: `Hello,
 
     Thank you for registering with us!
 
@@ -100,8 +102,9 @@ const requestOtp = asyncHandler(async (req, res) => {
     -For any help! contact-prashantmishra10232@gmail.com`,
   });
 
-  return res.status(200)
-  .json(new ApiResponse(200,{},"OTP sent successfully"))
+  return res
+    .status(200)
+    .json(new ApiResponse(200, {}, "OTP sent successfully"));
 });
 
 const registerUser = asyncHandler(async (req, res) => {
@@ -137,37 +140,38 @@ const registerUser = asyncHandler(async (req, res) => {
   const attemptsKey = `otp_attempts:email:${email}`;
   const attempts = await redis.get(attemptsKey);
 
-  if(attempts && Number(attempts)>=5){
-    throw new ApiError(429,"Too many incorrect attempts. Try later.")
-  };
+  if (attempts && Number(attempts) >= 5) {
+    throw new ApiError(429, "Too many incorrect attempts. Try later.");
+  }
 
   //fetching the otp from redis
   const hashedOtp = await redis.get(`otp:${email}`);
 
-  if(!hashedOtp){
-    throw new ApiError(400,"OTP expired or not requested")
+  if (!hashedOtp) {
+    throw new ApiError(400, "OTP expired or not requested");
   }
 
   //hash the incoming otp to compare it with redis otp
   const incomingOtpHashed = crypto
-  .createHash('sha256')
-  .update(`${otp}`)
-  .digest('hex');
+    .createHash("sha256")
+    .update(`${otp}`)
+    .digest("hex");
 
   //now compare them
-  if(hashedOtp !== incomingOtpHashed){
-    await redis.incr(attemptsKey) //here i am incrementing the counts of attempts
-    await redis.expire(attemptsKey,60*60);
-    throw new ApiError(400,"Invalid OTP")
+  if (hashedOtp !== incomingOtpHashed) {
+    await redis.incr(attemptsKey); //here i am incrementing the counts of attempts
+    await redis.expire(attemptsKey, 60 * 60);
+    throw new ApiError(400, "Invalid OTP");
   }
 
   await redis.del(`otp:${email}`);
   await redis.del(attemptsKey);
 
-  await redis.multi()
-  .incr(attemptsKey)
-  .expire(attemptsKey, 60*60)
-  .exec();
+  await redis
+    .multi()
+    .incr(attemptsKey)
+    .expire(attemptsKey, 60 * 60)
+    .exec();
 
   const user = await User.create({
     fullName,
@@ -232,6 +236,81 @@ const loginUser = asyncHandler(async (req, res) => {
       maxAge: 10 * 24 * 60 * 60 * 1000,
     })
     .json(new ApiResponse(200, loggedInUser, "User loggedIn successfully"));
+});
+
+//google OAuth setup here
+const googleCallback = asyncHandler(
+  async (req, accessToken, refreshToken, profile, done) => {
+    const user = await User.findOne({ googleId: profile.id });
+    let role = "Student";
+
+    if (req.query.state) {
+      try {
+        const stateObj = JSON.parse(
+          Buffer.from(req.query.state, "base64").toString()
+        );
+        if (stateObj.role) role = stateObj.role;
+      } catch (error) {
+        console.error("Failed to parse state param", error);
+      }
+    }
+
+    if (!user) {
+      const imageResponse = await axios.get(profile.photo[0].value, {
+        responseType: arrayBuffer,
+      });
+
+      const fileName = `${profile.displayName.replace(/\s+/g, "_")}_photo`;
+
+      const profilePhoto = await uploadOnCloudinary(
+        imageResponse.data,
+        fileName
+      );
+
+      user = await User.create({
+        googleId: profile.id,
+        fullName: profile.displayName,
+        email: profile.email[0].value,
+        profile: {
+          profilePhoto: profilePhoto?.url || "",
+          profilePhoto_id: profilePhoto._id,
+        },
+      });
+
+      done(null, user);
+    }
+  }
+);
+
+const handleLoginSuccess = asyncHandler(async () => {
+  const user = req.user;
+
+  const { accessToken, refreshToken } = await generateAccessAndRefereshTokens(
+    user._id
+  );
+
+  const loggedInUser = await User.findById(user._id).select("-password");
+
+  const encodedUser = Buffer.from(JSON.stringify(loggedInUser)).toString(
+    "base64"
+  );
+
+  const options = {
+    httpOnly: true,
+    secure: true,
+    sameSite: none,
+  };
+
+  const redirectUrl = `${process.env.CLIENT_URL}/login/success?accessToken=${accessToken}&user=${encodedUser}`;
+
+  return res
+    .status(200)
+    .cookie("accessToken", accessToken, { options, maxAge: 60 * 60 * 1000 })
+    .cookie("refreshToken", refreshToken, {
+      options,
+      maxAge: 10 * 24 * 60 * 60 * 1000,
+    })
+    .redirect(redirectUrl);
 });
 
 const logout = asyncHandler(async (req, res) => {
@@ -414,4 +493,6 @@ export {
   updateProfilePhoto,
   requestResetCode,
   resetPassword,
+  googleCallback,
+  handleLoginSuccess
 };
